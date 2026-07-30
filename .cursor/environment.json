@@ -1,0 +1,14 @@
+{
+  "name": "taxprosto-pro",
+  "install": "sudo apt-get update -y && sudo apt-get install -y libxml2-utils",
+  "terminals": [
+    {
+      "name": "static-server",
+      "command": "python3 -m http.server 8080",
+      "description": "Локальний статичний сервер для index.html (застосунок 100% client-side, без білд-кроку) — відкрити http://localhost:8080/ для ручного/browser-тестування."
+    }
+  ],
+  "ports": [
+    { "name": "app", "port": 8080 }
+  ]
+}
