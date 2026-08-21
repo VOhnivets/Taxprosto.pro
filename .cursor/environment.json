@@ -1,5 +1,6 @@
 {
   "name": "taxprosto-pro",
+  "repositoryDependencies": ["github.com/VOhnivets/Taxprosto.pro"],
   "install": "sudo apt-get update -y && sudo apt-get install -y libxml2-utils",
   "terminals": [
     {
