@@ -2,6 +2,10 @@
 <html lang="uk">
 <head>
 <meta charset="UTF-8">
+<!-- CSP: власний код + pdf.js з cdnjs. connect-src лише cdnjs — навіть при XSS
+     дані не підуть на сторонній домен (окрім того, що вже дозволяє цей CDN).
+     frame-ancestors/sandbox у <meta> браузери ігнорують — лише HTTP-заголовок. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; worker-src blob: https://cdnjs.cloudflare.com; style-src 'unsafe-inline'; img-src 'self' data:; connect-src https://cdnjs.cloudflare.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>taxprosto.pro — декларація про майновий стан і доходи</title>
 <meta name="description" content="Заповніть річну податкову декларацію (форма F0100215) з довідки про доходи. Усе локально у браузері — дані не передаються на сервер.">
@@ -11,7 +15,9 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://taxprosto.pro/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%232563eb'/%3E%3Ctext x='50' y='72' font-size='64' text-anchor='middle' fill='white' font-family='Arial' font-weight='bold'%3E%E2%82%B4%3C/text%3E%3C/svg%3E">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs" type="module"></script>
+<!-- pdf.js 4.10.38 (≥ 4.2.67 виправляє CVE-2024-4367). SRI на модуль;
+     воркер верифікується через crypto.subtle — integrity на Worker() не діє. -->
+<link rel="modulepreload" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs" integrity="sha384-+0ti2moQlmLN7WZHE2RHIf5lV8hHxhxEalN0il3YZceG26fUPyOkR0hp9daxk1i7" crossorigin="anonymous">
 <style>
   :root {
     --bg: #f4f6fb;
@@ -60,11 +66,11 @@
   .dropzone small { display: block; margin-top: 8px; color: var(--muted); }
 
   label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
-  input[type=text], input[type=number] {
+  input[type=text], input[type=number], select {
     width: 100%; padding: 9px 12px; border: 1px solid var(--border);
-    border-radius: 8px; font-size: 14px; font-family: inherit;
+    border-radius: 8px; font-size: 14px; font-family: inherit; background: #fff;
   }
-  input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  input:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
   .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 16px; }
 
@@ -77,12 +83,12 @@
   .btn {
     display: inline-block; background: var(--accent); color: #fff; border: none;
     padding: 12px 24px; border-radius: 8px; font-size: 15px; font-weight: 600;
-    cursor: pointer; font-family: inherit;
+    cursor: pointer; font-family: inherit; text-decoration: none;
   }
   .btn:hover { background: var(--accent-dark); }
   .btn.secondary { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
   .btn:disabled { opacity: .5; cursor: not-allowed; }
-  .actions { margin-top: 24px; display: flex; gap: 12px; }
+  .actions { margin-top: 24px; display: flex; gap: 12px; flex-wrap: wrap; }
 
   .note {
     background: var(--warn-bg); border-left: 4px solid var(--warn); color: #78350f;
@@ -96,6 +102,7 @@
   details { margin-top: 16px; }
   summary { cursor: pointer; font-size: 13px; color: var(--accent); }
   h2 { font-size: 16px; margin: 0 0 4px; }
+  h3 { font-size: 14px; margin: 24px 0 0; }
   .sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
   .money { font-variant-numeric: tabular-nums; }
 </style>
@@ -103,7 +110,7 @@
 <body>
 <header class="top">
   <h1><span>taxprosto</span>.pro</h1>
-  <p>Декларація про майновий стан і доходи (форма 0100424) — заповнення з довідки про доходи</p>
+  <p>Декларація про майновий стан і доходи (форма F0100215) — заповнення з довідки про доходи</p>
 </header>
 
 <main>
@@ -118,12 +125,20 @@
     <h2>Завантажте довідку про доходи</h2>
     <p class="sub">PDF-довідка «Відомості з Державного реєстру фізичних осіб — платників податків»
        (форма F1419104) з Електронного кабінету або Дії. Файл обробляється локально у вашому браузері.</p>
-    <div class="dropzone" id="dropzone">
+    <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Завантажити PDF-довідку">
       <strong>Перетягніть PDF сюди</strong> або натисніть, щоб вибрати файл
       <small>дані не передаються на сервер</small>
       <input type="file" id="fileInput" accept="application/pdf" class="hidden">
     </div>
-    <p id="parseStatus" class="sub" style="margin-top:16px"></p>
+    <p id="parseStatus" class="sub" style="margin-top:16px" role="status" aria-live="polite"></p>
+    <div class="note">
+      <strong>Перш ніж почати</strong>
+      <ul>
+        <li>Це не податкова консультація. Відповідальність за зміст і подання декларації — на вас (ст. 17, 179 ПКУ).</li>
+        <li>Якщо протягом року були <b>лише доходи від податкових агентів</b> (типова зарплата з утриманим ПДФО/ВЗ) — декларацію можна <b>не подавати</b> (п. 179.2 ПКУ), крім випадків, прямо передбачених розд. IV ПКУ (знижка, іноземні доходи тощо).</li>
+        <li>MVP заповнює зарплату <b>код 101</b> (рядки 10.1 / 10.3), цивільно-правові / гіг <b>код 102</b> (10.2 / 10.3) і не оподатковувані проценти за держ. ЦП <b>код 129</b> (рядок 11.3). Іноземні доходи, ФОП, податкова знижка, додатки Ф1/Ф2 — поза цим MVP.</li>
+      </ul>
+    </div>
   </section>
 
   <!-- КРОК 2 -->
@@ -131,70 +146,83 @@
     <h2>Перевірте дані</h2>
     <p class="sub">Дані витягнуто автоматично. Перевірте та за потреби виправте перед генерацією XML.</p>
 
-    <h3 style="font-size:14px">Платник податку</h3>
+    <h3>Платник податку</h3>
     <div class="grid-3">
-      <div><label>РНОКПП</label><input type="text" id="f_tin"></div>
-      <div><label>Прізвище</label><input type="text" id="f_last"></div>
-      <div><label>Ім'я</label><input type="text" id="f_first"></div>
+      <div><label for="f_tin">РНОКПП</label><input type="text" id="f_tin" inputmode="numeric" autocomplete="off"></div>
+      <div><label for="f_last">Прізвище</label><input type="text" id="f_last" autocomplete="off"></div>
+      <div><label for="f_first">Ім'я</label><input type="text" id="f_first" autocomplete="off"></div>
     </div>
     <div class="grid-3">
-      <div><label>По батькові</label><input type="text" id="f_middle"></div>
-      <div><label>Звітний рік</label><input type="number" id="f_year"></div>
+      <div><label for="f_middle">По батькові</label><input type="text" id="f_middle" autocomplete="off"></div>
+      <div><label for="f_year">Звітний рік</label><input type="number" min="2015" id="f_year"></div>
       <div></div>
     </div>
 
-    <h3 style="font-size:14px; margin-top:24px">Дохід — заробітна плата (код 101)</h3>
+    <h3>10.1 — звичайна зарплата (ПДФО 18%), код 101</h3>
     <div class="grid-3">
-      <div><label>Рядок декларації</label>
-        <select id="f_salaryrow" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
-          <option value="10.1">10.1 — звичайна зарплата (ПДФО 18%)</option>
-          <option value="10.3">10.3 — резидент Дія Сіті (ПДФО 5%)</option>
-        </select>
-      </div>
-      <div><label>Сума доходу, грн</label><input type="number" step="0.01" id="f_income"></div>
-      <div><label>Утримано ПДФО, грн</label><input type="number" step="0.01" id="f_pdfo"></div>
-    </div>
-    <div class="grid-3">
-      <div><label>Утримано ВЗ, грн</label><input type="number" step="0.01" id="f_vz"></div>
-      <div><label>Не оподатк. дохід — ряд. 11.3 (код 129), грн</label><input type="number" step="0.01" id="f_nontax"></div>
-      <div></div>
+      <div><label for="f_income101">Сума доходу, грн</label><input type="number" min="0" step="0.01" id="f_income101"></div>
+      <div><label for="f_pdfo101">Утримано ПДФО, грн</label><input type="number" min="0" step="0.01" id="f_pdfo101"></div>
+      <div><label for="f_vz101">Утримано ВЗ, грн</label><input type="number" min="0" step="0.01" id="f_vz101"></div>
     </div>
 
-    <h3 style="font-size:14px; margin-top:24px">Реквізити декларації</h3>
-    <p class="sub" style="margin-bottom:8px">Потрібні для валідного XML. Деякі дані не містяться в довідці — заповніть вручну
+    <h3>10.2 — цивільно-правовий договір (ПДФО 18%), код 102</h3>
+    <p class="sub" style="margin-bottom:8px">Звичайна винагорода за ЦПД. Гіг-контракт Дія Сіті зі ставкою 5% сюди не кладіть — він у блоці 10.3.</p>
+    <div class="grid-3">
+      <div><label for="f_income102">Сума доходу, грн</label><input type="number" min="0" step="0.01" id="f_income102"></div>
+      <div><label for="f_pdfo102">Утримано ПДФО, грн</label><input type="number" min="0" step="0.01" id="f_pdfo102"></div>
+      <div><label for="f_vz102">Утримано ВЗ, грн</label><input type="number" min="0" step="0.01" id="f_vz102"></div>
+    </div>
+
+    <h3>10.3 — резидент Дія Сіті (ПДФО 5%), коди 101 / 102</h3>
+    <p class="sub" style="margin-bottom:8px">Зарплата працівника або винагорода гіг-спеціаліста резидента Дія Сіті (ст. 170.14-1 ПКУ). Ліміт пільгової ставки — еквівалент 240&nbsp;000 євро на рік; перевищення декларується окремо (18%).</p>
+    <div class="grid-3">
+      <div><label for="f_income103">Сума доходу, грн</label><input type="number" min="0" step="0.01" id="f_income103"></div>
+      <div><label for="f_pdfo103">Утримано ПДФО, грн</label><input type="number" min="0" step="0.01" id="f_pdfo103"></div>
+      <div><label for="f_vz103">Утримано ВЗ, грн</label><input type="number" min="0" step="0.01" id="f_vz103"></div>
+    </div>
+
+    <h3>11.3 — не оподатковувані доходи (код 129, пп. 165.1.2 ПКУ)</h3>
+    <p class="sub" style="margin-bottom:8px">Проценти на державні цінні папери / боргові зобов’язання НБУ. Самі по собі не створюють обов’язку подати декларацію.</p>
+    <div class="grid-3">
+      <div><label for="f_nontax">Сума, грн</label><input type="number" min="0" step="0.01" id="f_nontax"></div>
+      <div></div><div></div>
+    </div>
+
+    <h3>Реквізити декларації</h3>
+    <p class="sub" style="margin-bottom:8px">Обов’язкові для валідного XML за XSD ДПС. Коди регіону/району та адреси в довідці немає — заповніть вручну
        (Електронний кабінет може уточнити їх за реєстром при імпорті).</p>
     <div class="grid-3">
-      <div><label>Категорія платника</label>
-        <select id="f_cat" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
+      <div><label for="f_cat">Категорія платника</label>
+        <select id="f_cat">
           <option value="H05">Громадянин</option>
           <option value="H06">Підприємець (загальна система)</option>
           <option value="H08">Незалежна проф. діяльність / член ФГ</option>
           <option value="H07">Особа, що заявляє право на податкову знижку</option>
         </select>
       </div>
-      <div><label>Орган ДПС (назва)</label><input type="text" id="f_stiname"></div>
-      <div><label>Код ДПІ (C_STI_ORIG)</label><input type="text" id="f_sti"></div>
+      <div><label for="f_stiname">Орган ДПС (назва)</label><input type="text" id="f_stiname" autocomplete="off"></div>
+      <div><label for="f_sti">Код ДПІ (C_STI_ORIG)</label><input type="text" id="f_sti" inputmode="numeric" autocomplete="off"></div>
     </div>
     <div class="grid-3">
-      <div><label>Код регіону (0–99)</label><input type="number" id="f_creg" min="0" max="99" placeholder="напр. 4"></div>
-      <div><label>Код району (0–99)</label><input type="number" id="f_craj" min="0" max="99" placeholder="напр. 12"></div>
-      <div><label>Email</label><input type="text" id="f_email"></div>
+      <div><label for="f_creg">Код регіону (0–99)</label><input type="number" id="f_creg" min="0" max="99" placeholder="напр. 4"></div>
+      <div><label for="f_craj">Код району (0–99)</label><input type="number" id="f_craj" min="0" max="99" placeholder="напр. 12"></div>
+      <div><label for="f_email">Email</label><input type="text" id="f_email" autocomplete="off"></div>
     </div>
     <div class="grid-3">
-      <div><label>Населений пункт</label><input type="text" id="f_city" placeholder="м. Камʼянське"></div>
-      <div><label>Вулиця</label><input type="text" id="f_street" placeholder="вул. …"></div>
-      <div><label>Будинок</label><input type="text" id="f_build"></div>
+      <div><label for="f_city">Населений пункт</label><input type="text" id="f_city" placeholder="м. Камʼянське" autocomplete="off"></div>
+      <div><label for="f_street">Вулиця</label><input type="text" id="f_street" placeholder="вул. …" autocomplete="off"></div>
+      <div><label for="f_build">Будинок</label><input type="text" id="f_build" autocomplete="off"></div>
     </div>
     <div class="grid-3">
-      <div><label>Квартира</label><input type="text" id="f_apt"></div>
-      <div><label>Поштовий індекс</label><input type="text" id="f_zip"></div>
-      <div><label>Телефон</label><input type="text" id="f_tel"></div>
+      <div><label for="f_apt">Квартира</label><input type="text" id="f_apt" autocomplete="off"></div>
+      <div><label for="f_zip">Поштовий індекс</label><input type="text" id="f_zip" inputmode="numeric" autocomplete="off"></div>
+      <div><label for="f_tel">Телефон</label><input type="text" id="f_tel" autocomplete="off"></div>
     </div>
 
     <details>
       <summary>Показати рядки довідки (деталізація)</summary>
       <table id="rowsTable">
-        <thead><tr><th>Податковий агент</th><th>Місяць</th><th>Дохід</th><th>ПДФО</th><th>ВЗ</th></tr></thead>
+        <thead><tr><th>Податковий агент</th><th>Місяць</th><th>Код</th><th>Дохід</th><th>ПДФО</th><th>ВЗ</th></tr></thead>
         <tbody></tbody>
         <tfoot></tfoot>
       </table>
@@ -203,8 +231,8 @@
     <div class="note" id="reviewNote"></div>
 
     <div class="actions">
-      <button class="btn" id="genBtn">Згенерувати XML</button>
-      <button class="btn secondary" id="backBtn">← Інша довідка</button>
+      <button class="btn" id="genBtn" type="button">Згенерувати XML</button>
+      <button class="btn secondary" id="backBtn" type="button">← Інша довідка</button>
     </div>
   </section>
 
@@ -216,8 +244,9 @@
     </div>
     <div class="actions">
       <a class="btn" id="downloadBtn" download>⬇ Завантажити XML</a>
-      <button class="btn secondary" id="restartBtn">Спочатку</button>
+      <button class="btn secondary" id="restartBtn" type="button">Спочатку</button>
     </div>
+    <div class="note hidden" id="encodingWarning" role="alert"></div>
     <details open>
       <summary>Перегляд XML</summary>
       <pre id="xmlPreview" style="background:#0f172a;color:#e2e8f0;padding:16px;border-radius:8px;overflow:auto;font-size:12px;max-height:340px"></pre>
@@ -225,249 +254,206 @@
     <div class="note">
       <strong>Важливо перед поданням:</strong>
       <ul>
-        <li>Структура XML <b>валідована за офіційною XSD-схемою ДПС</b> F0100215 (ред. наказу МФУ №119 від 26.02.2025).</li>
-        <li>MVP покриває лише <b>заробітну плату (код 101)</b>. Інші доходи з довідки (напр. код 129 — цінні папери) у XML не включені.</li>
-        <li>ПДФО 5% свідчить про статус <b>резидента Дія Сіті</b> — такий дохід може декларуватись у рядку 10.3, а не 10.1. Уточніть свою ситуацію.</li>
-        <li>Перевірте <b>коди регіону/району (C_REG/C_RAJ)</b> та адресу — їх немає в довідці. Кабінет може уточнити їх за реєстром.</li>
-        <li>Схема перевіряє лише <b>структуру</b>, не арифметику. Контрольні співвідношення (рядки зобов'язань) тут не обчислюються.</li>
+        <li>Структура XML звірена з офіційною XSD ДПС F0100215 (ред. наказу МФУ №119 від 26.02.2025). Обов’язкові поля перевіряються перед генерацією; арифметику контрольних співвідношень (рядки зобов’язань 20+) цей MVP <b>не обчислює</b>.</li>
+        <li>Покриття: код 101 → 10.1 / 10.3; код 102 → 10.2 / 10.3; код 129 → 11.3. Інші коди з довідки в XML не включаються.</li>
+        <li>ПДФО 5% — спецрежим Дія Сіті (ст. 170.14-1 ПКУ). ВЗ з 01.10.2024 — 5% (Закон №3817-IX), у тому числі для Дія Сіті.</li>
+        <li>Перевірте <b>коди регіону/району (C_REG/C_RAJ)</b> та адресу — їх немає в довідці.</li>
       </ul>
     </div>
   </section>
 </main>
 
 <script type="module">
-import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs';
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
+import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs';
 
-// ---------- стан застосунку ----------
-const state = { tin:'', last:'', first:'', middle:'', year:'', rows:[], otherCodes:{},
-                stiCode:'', stiName:'', email:'', nonTaxable:0 };
+const PDF_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs';
+const PDF_WORKER_SHA384 = 'ToeVvShCxKc6CEvhHeMt0Q8A06pSPDbAlngO9nokrDmh914gk/pYd0N7D0a4Lz2o';
 
-// ---------- елементи ----------
-const $ = id => document.getElementById(id);
-const dropzone = $('dropzone'), fileInput = $('fileInput');
-
-// ---------- крок 1: завантаження PDF ----------
-dropzone.addEventListener('click', () => fileInput.click());
-dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
-dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
-dropzone.addEventListener('drop', e => {
-  e.preventDefault(); dropzone.classList.remove('drag');
-  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
-});
-fileInput.addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
-
-async function handleFile(file) {
-  if (file.type !== 'application/pdf') { setStatus('Це не PDF-файл.', true); return; }
-  setStatus('Обробка PDF…');
+async function verifiedWorkerSrc() {
   try {
-    const buf = await file.arrayBuffer();
-    const text = await extractText(buf);
-    parseCertificate(text);
-    fillReview();
-    showStep(2);
+    const res = await fetch(PDF_WORKER_URL);
+    const buf = await res.arrayBuffer();
+    const digest = await crypto.subtle.digest('SHA-384', buf);
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(digest)));
+    if (b64 !== PDF_WORKER_SHA384) throw new Error('контрольна сума воркера pdf.js не збігається');
+    return URL.createObjectURL(new Blob([buf], { type: 'text/javascript' }));
   } catch (err) {
-    console.error(err);
-    setStatus('Не вдалося обробити файл: ' + err.message, true);
+    console.warn('Не вдалося перевірити цілісність воркера pdf.js, використовую CDN напряму:', err);
+    return PDF_WORKER_URL;
   }
 }
-function setStatus(msg, isErr) {
-  const el = $('parseStatus'); el.textContent = msg;
-  el.style.color = isErr ? '#dc2626' : 'var(--muted)';
+pdfjsLib.GlobalWorkerOptions.workerSrc = await verifiedWorkerSrc();
+
+// === PURE_START ===
+const CURRENT_YEAR = new Date().getFullYear();
+const CAT_CODES = ['H05', 'H06', 'H07', 'H08'];
+const MONTHS_RE = /(Січень|Лютий|Березень|Квітень|Травень|Червень|Липень|Серпень|Вересень|Жовтень|Листопад|Грудень)/g;
+const STI_CODE_RE = /^(3070|3[1-5]00|9001|9191|9393|9494|9900|9911|9970|999[1-9]|2[0-8]\d{2}|1\d{3}|[1-9]\d{2})$/;
+
+function escHtml(s) {
+  return String(s).replace(/[<>&'"]/g, c =>
+    ({ '<':'&lt;', '>':'&gt;', '&':'&amp;', "'":'&apos;', '"':'&quot;' }[c]));
+}
+const esc = escHtml;
+
+function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
+
+function isValidRnokpp(tin) {
+  if (!/^\d{10}$/.test(tin)) return false;
+  const w = [-1, 5, 7, 9, 4, 6, 10, 5, 7];
+  const d = tin.split('').map(Number);
+  const sum = w.reduce((s, wi, i) => s + wi * d[i], 0);
+  // JS "%" — залишок, не модуль: нормалізуємо від’ємну суму.
+  const control = (((sum % 11) + 11) % 11) % 10;
+  return control === d[9];
 }
 
-// ---------- витяг тексту (реконструкція рядків за Y/X) ----------
-async function extractText(buf) {
-  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
-  const lines = [];
-  for (let p = 1; p <= doc.numPages; p++) {
-    const page = await doc.getPage(p);
-    const tc = await page.getTextContent();
-    const items = tc.items
-      .filter(i => i.str !== undefined)
-      .sort((a, b) => (b.transform[5] - a.transform[5]) || (a.transform[4] - b.transform[4]));
-    let lastY = null, line = '';
-    for (const it of items) {
-      const y = Math.round(it.transform[5]);
-      if (lastY === null) lastY = y;
-      if (Math.abs(y - lastY) > 3) { lines.push(line.trim()); line = ''; lastY = y; }
-      line += it.str + ' ';
-    }
-    if (line.trim()) lines.push(line.trim());
+function emptyBucket() { return { income: 0, pdfo: 0, vz: 0 }; }
+
+function extractCodeRows(flat, code) {
+  const N = '(\\d+(?:[.,]\\d+)?)';
+  const re = new RegExp([N, N, N, N, N, N, `${code}\\s*[-–—‐−]`].join('\\s+'), 'g');
+  const rows = [];
+  let m, prevEnd = 0;
+  while ((m = re.exec(flat)) !== null) {
+    const num = s => parseFloat(s.replace(',', '.'));
+    const entry = {
+      code: String(code),
+      income: num(m[1]), incomePaid: num(m[2]),
+      pdfo: num(m[3]), pdfoPaid: num(m[4]),
+      vz: num(m[5]), vzPaid: num(m[6]),
+    };
+    const ctxStart = Math.max(prevEnd, m.index - 200);
+    const ctx = flat.slice(ctxStart, m.index);
+    entry.month = (ctx.match(MONTHS_RE) || []).pop() || '';
+    entry.year = (ctx.match(/\b(20\d{2})\b/g) || []).pop() || '';
+    const nameM = ctx.match(/((?:ТОВ|АТ|ПАТ|ПрАТ|ФОП|ДП)\s+[^0-9]*?(?:'[^']*'|"[^"]*"|«[^»]*»|[А-ЯA-ZЇІЄҐ0-9]+))\s*$/);
+    entry.agent = nameM ? nameM[1].trim().replace(/\s+/g, ' ') : '';
+    entry.pdfoMismatch = Math.abs(entry.pdfo - entry.pdfoPaid) > 0.01 || Math.abs(entry.vz - entry.vzPaid) > 0.01;
+    rows.push(entry);
+    prevEnd = re.lastIndex;
   }
-  return lines.join('\n');
+  return rows;
 }
 
-// ---------- парсер довідки F1419104 ----------
 function parseCertificate(text) {
   const flat = text.replace(/\s+/g, ' ');
-
-  // Платник: слово перед міткою
   const grab = re => { const m = flat.match(re); return m ? m[1] : ''; };
-  state.last   = grab(/([А-ЯЁІЇЄҐ’']{2,})\s+Прізвище/i);
-  state.first  = grab(/([А-ЯЁІЇЄҐ’']{2,})\s+Ім[’'я]/i);
-  state.middle = grab(/([А-ЯЁІЇЄҐ’']{2,})\s+По\s+батькові/i);
+  const out = {
+    tin: '', last: '', first: '', middle: '', year: '',
+    rows: [], excludedYearRows: 0, otherCodes: {},
+    stiCode: '', stiName: '', email: '',
+    nonTaxable: 0, nonTaxWithheld: false,
+  };
 
-  // РНОКПП — 10 цифр перед «Реєстраційний номер», або перший 10-значний токен
-  state.tin = grab(/\b(\d{10})\b\s+Реєстраційний/) || grab(/\b(\d{10})\b/);
+  out.last   = grab(/([А-ЯЁІЇЄҐ’'ʼ-]{2,})\s+Прізвище/i);
+  out.first  = grab(/([А-ЯЁІЇЄҐ’'ʼ-]{2,})\s+Ім[’'ʼ]?я/i);
+  out.middle = grab(/([А-ЯЁІЇЄҐ’'ʼ-]{2,})\s+По\s+батькові/i);
 
-  // Звітний рік — мода всіх 20XX у документі (рядки таблиці = звітний рік).
-  // Стійко до різного порядку міток у форматах Дія / Електронний кабінет.
-  const years = [...flat.matchAll(/\b(20\d{2})\b/g)].map(m => m[1]);
-  const yf = {}; years.forEach(y => yf[y] = (yf[y] || 0) + 1);
-  state.year = Object.entries(yf).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
-
-  // Орган ДПС (C_STI_ORIG / HSTI): сегмент між «паспорта*» і «Код та назва територіального органу».
-  // Працює для обох layout-ів: код 403 може бути на початку (Дія) або всередині назви (кабінет).
-  const stiSeg = grab(/паспорт[аи]\*?\s*(.*?)\s*Код\s+та\s+назва\s+територіального/);
-  state.stiCode = (stiSeg.match(/\b(\d{3,4})\b/) || [])[1] || '';
-  state.stiName = stiSeg.replace(/\b\d{3,4}\b/g, ' ').replace(/\s+/g, ' ').replace(/^[\s,;.]+|[\s,;.]+$/g, '').trim();
-  state.email = grab(/([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})/) || '';
-
-  // Рядки зарплати (код 101): 6 грошових колонок + код «101 -» наприкінці рядка.
-  // гр: дохід_нар, дохід_випл, ПДФО_нар, ПДФО_перер, ВЗ_нар, ВЗ_перер
-  const N = '(\\d+(?:[.,]\\d+)?)';
-  const rowRe = new RegExp(
-    [N,N,N,N,N,N,'101\\s*[-–]'].join('\\s+'), 'g');
-
-  const rows = [];
-  let m;
-  while ((m = rowRe.exec(flat)) !== null) {
-    const num = s => parseFloat(s.replace(',', '.'));
-    const entry = { income:num(m[1]), pdfo:num(m[3]), vz:num(m[5]), code:'101' };
-    const ctx = flat.slice(0, m.index).slice(-120);
-    entry.month = (ctx.match(/(Січень|Лютий|Березень|Квітень|Травень|Червень|Липень|Серпень|Вересень|Жовтень|Листопад|Грудень)/g) || []).pop() || '';
-    const nameM = ctx.match(/((?:ТОВ|АТ|ПАТ|ПрАТ|ФОП|ДП)\s+[^0-9]*?(?:'[^']*'|«[^»]*»|[А-ЯA-ZЇІЄҐ0-9]+))\s*$/);
-    entry.agent = nameM ? nameM[1].trim().replace(/\s+/g,' ') : '';
-    rows.push(entry);
+  out.tin = grab(/\b(\d{10})\b\s+Реєстраційний/);
+  if (!out.tin || !isValidRnokpp(out.tin)) {
+    const candidates = [...flat.matchAll(/\b(\d{10})\b/g)].map(mm => mm[1]);
+    out.tin = candidates.find(isValidRnokpp) || (isValidRnokpp(out.tin) ? out.tin : '');
   }
 
-  // Усі коди ознаки доходу — лише в табличній частині (до приміток), щоб не ловити
-  // посилання на закони на 2-й сторінці. Тут «NNN -» завжди = код доходу.
+  const stiSeg = grab(/паспорт[аи]\*?\s*(.*?)\s*Код\s+та\s+назва\s+територіального/);
+  out.stiCode = (stiSeg.match(/\b(\d{3,4})\b/) || [])[1] || '';
+  out.stiName = stiSeg.replace(/\b\d{3,4}\b/g, ' ').replace(/\s+/g, ' ').replace(/^[\s,;.]+|[\s,;.]+$/g, '').trim();
+
+  const emailByLabel = grab(/(?:Електронна пошта|E-?mail)\s*[:\-]?\s*([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})/i);
+  out.email = emailByLabel || grab(/([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})/) || '';
+
+  const rows101 = extractCodeRows(flat, '101');
+  const rows102 = extractCodeRows(flat, '102');
+  const rows129 = extractCodeRows(flat, '129');
+  const incomeRows = rows101.concat(rows102);
+
+  const rowYears = incomeRows.map(r => r.year).filter(Boolean);
+  const yf = {}; rowYears.forEach(y => { yf[y] = (yf[y] || 0) + 1; });
+  const sortedYears = Object.entries(yf).sort((a, b) => b[1] - a[1]);
+  out.year = sortedYears[0]?.[0] || (flat.match(/\b(20\d{2})\b/) || [])[1] || '';
+
+  const mainYear = sortedYears[0]?.[0];
+  const includedRows = mainYear ? incomeRows.filter(r => !r.year || r.year === mainYear) : incomeRows;
+  out.excludedYearRows = incomeRows.length - includedRows.length;
+  out.rows = includedRows;
+
   const tableText = flat.split(/Дата формування відповіді|Самозайнята особа/)[0];
   const otherCodes = {};
-  for (const cm of tableText.matchAll(/(\d{3})\s*[-–]\s*[А-Яа-яA-Za-zЇіІїЄєҐґ]/g)) {
-    if (cm[1] !== '101') otherCodes[cm[1]] = (otherCodes[cm[1]] || 0) + 1;
+  for (const cm of tableText.matchAll(/(\d{3})\s*[-–—‐−]\s*[А-Яа-яA-Za-zЇіІїЄєҐґ]/g)) {
+    if (cm[1] !== '101' && cm[1] !== '102' && cm[1] !== '129') {
+      otherCodes[cm[1]] = (otherCodes[cm[1]] || 0) + 1;
+    }
   }
+  out.otherCodes = otherCodes;
 
-  // Код 129 (доходи від ЦП, утримано 0) → рядок 11.3 «не оподатковувані».
-  // Структура: «129 - Доходи вiд … <назва> <дохід> <дохід> 0 0 0 0». Беремо дохід (col7).
-  let nonTaxable = 0;
-  for (const cm of tableText.matchAll(/129\s*[-–]\s*Доходи[\s\S]{0,90}?(\d+(?:[.,]\d+)?)\s+\d+(?:[.,]\d+)?\s+0\s+0\s+0\s+0/g)) {
-    nonTaxable += parseFloat(cm[1].replace(',', '.'));
-  }
-
-  state.rows = rows;
-  state.otherCodes = otherCodes;
-  state.nonTaxable = Math.round((nonTaxable + Number.EPSILON) * 100) / 100;
+  const nonTaxable = rows129.reduce((s, r) => s + r.income, 0);
+  out.nonTaxable = round2(nonTaxable);
+  out.nonTaxWithheld = rows129.some(r => r.pdfo > 0 || r.vz > 0);
+  return out;
 }
 
-// ---------- заповнення форми перевірки ----------
-function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
-function fmt(n) { return round2(n).toLocaleString('uk-UA', {minimumFractionDigits:2, maximumFractionDigits:2}); }
-
-function totals() {
-  return state.rows.reduce((a, r) => ({
-    income: a.income + r.income, pdfo: a.pdfo + r.pdfo, vz: a.vz + r.vz
-  }), { income:0, pdfo:0, vz:0 });
+function classifyRows(rows) {
+  const salary = emptyBucket(), civil = emptyBucket(), diia = emptyBucket();
+  for (const r of rows) {
+    const rate = r.income > 0 ? r.pdfo / r.income : 0;
+    const bucket = Math.abs(rate - 0.05) < 0.01 ? diia
+      : (r.code === '102' ? civil : salary);
+    bucket.income += r.income; bucket.pdfo += r.pdfo; bucket.vz += r.vz;
+  }
+  return { salary, civil, diia };
 }
 
-function fillReview() {
-  $('f_tin').value = state.tin;
-  $('f_last').value = state.last;
-  $('f_first').value = state.first;
-  $('f_middle').value = state.middle;
-  $('f_year').value = state.year;
-
-  const t = totals();
-  $('f_income').value = round2(t.income);
-  $('f_pdfo').value = round2(t.pdfo);
-  $('f_vz').value = round2(t.vz);
-  $('f_nontax').value = state.nonTaxable || '';
-
-  // Авто-вибір рядка зарплати за ставкою ПДФО: ≈5% → 10.3 (Дія Сіті), інакше 10.1.
-  const rate = t.income > 0 ? t.pdfo / t.income : 0;
-  $('f_salaryrow').value = (Math.abs(rate - 0.05) < 0.005) ? '10.3' : '10.1';
-
-  // реквізити з довідки (де є)
-  $('f_sti').value = state.stiCode;
-  $('f_stiname').value = state.stiName;
-  $('f_email').value = state.email;
-
-  // деталізація
-  const tb = $('rowsTable').querySelector('tbody');
-  tb.innerHTML = state.rows.map(r =>
-    `<tr><td>${r.agent || '—'}</td><td>${r.month}</td>
-     <td class="money">${fmt(r.income)}</td><td class="money">${fmt(r.pdfo)}</td>
-     <td class="money">${fmt(r.vz)}</td></tr>`).join('');
-  $('rowsTable').querySelector('tfoot').innerHTML =
-    `<tr><td>Разом (${state.rows.length} рядків)</td><td></td>
-     <td class="money">${fmt(t.income)}</td><td class="money">${fmt(t.pdfo)}</td>
-     <td class="money">${fmt(t.vz)}</td></tr>`;
-
-  // примітки
-  const notes = [];
-  if (!state.rows.length) notes.push('Рядків зарплати (код 101) не знайдено — перевірте файл або введіть суми вручну.');
-  const others = Object.entries(state.otherCodes);
-  if (others.length) {
-    notes.push('У довідці є інші доходи, які <b>не включені</b> в цей MVP: ' +
-      others.map(([c, n]) => `код ${c} (${n} рядк.)`).join(', ') + '.');
+function validate(d) {
+  const errors = [];
+  if (!isValidRnokpp(d.tin)) errors.push('РНОКПП не пройшов перевірку контрольної цифри (10 цифр) — перевірте номер.');
+  const y = parseInt(d.year, 10);
+  if (!y || y < 2015 || y > CURRENT_YEAR) errors.push(`Звітний рік виглядає некоректним: «${d.year || '—'}».`);
+  if (!(d.income101 > 0) && !(d.income102 > 0) && !(d.income103 > 0) && !(d.nonTax > 0)) {
+    errors.push('Не вказано жодного доходу — немає що декларувати.');
   }
-  if (t.income > 0 && Math.abs(t.pdfo / t.income - 0.05) < 0.005) {
-    notes.push('Ставка ПДФО ≈ 5% — ознака <b>резидента Дія Сіті</b>. Такий дохід може декларуватись у рядку 10.3.');
+  if (!d.last || !d.first) errors.push('Не заповнено прізвище або ім’я.');
+  const reg = Number(d.creg), raj = Number(d.craj);
+  if (d.creg === '' || !Number.isInteger(reg) || reg < 0 || reg > 99) {
+    errors.push('Код регіону (C_REG) обов’язковий і має бути цілим числом 0–99.');
   }
-  $('reviewNote').innerHTML = notes.length
-    ? '<strong>Зверніть увагу:</strong><ul>' + notes.map(n => `<li>${n}</li>`).join('') + '</ul>'
-    : '';
-  $('reviewNote').style.display = notes.length ? '' : 'none';
+  if (d.craj === '' || !Number.isInteger(raj) || raj < 0 || raj > 99) {
+    errors.push('Код району (C_RAJ) обов’язковий і має бути цілим числом 0–99.');
+  }
+  if (!STI_CODE_RE.test(d.sti)) {
+    errors.push('Код ДПІ (C_STI_ORIG) обов’язковий і має відповідати довіднику ДПС (3–4 цифри).');
+  }
+  if (!d.stiName && !d.sti) errors.push('Не заповнено назву органу ДПС (HSTI).');
+  if (!d.city) errors.push('Не заповнено населений пункт.');
+  if (!d.street) errors.push('Не заповнено вулицю.');
+  if (d.zip && !/^\d{5}$/.test(d.zip)) errors.push('Поштовий індекс має складатися з 5 цифр або бути порожнім.');
+  if (d.email && !/^[^@]+@[^@]+$/.test(d.email)) errors.push('Email має вигляд name@domain.');
+  if (d.tel && !/^[0-9 ()+\-.,;]{4,}$/.test(d.tel)) errors.push('Телефон містить недопустимі символи.');
+  return errors;
 }
 
-// ---------- крок 2 → 3: генерація ----------
-$('genBtn').addEventListener('click', () => {
-  const v = id => $(id).value.trim();
-  const data = {
-    tin: v('f_tin'), last: v('f_last'), first: v('f_first'), middle: v('f_middle'),
-    year: v('f_year'),
-    income: parseFloat($('f_income').value) || 0,
-    pdfo: parseFloat($('f_pdfo').value) || 0,
-    vz: parseFloat($('f_vz').value) || 0,
-    nonTax: parseFloat($('f_nontax').value) || 0,
-    salaryRow: v('f_salaryrow'),
-    cat: v('f_cat'), sti: v('f_sti'), stiName: v('f_stiname'),
-    creg: v('f_creg'), craj: v('f_craj'), email: v('f_email'),
-    city: v('f_city'), street: v('f_street'), build: v('f_build'),
-    apt: v('f_apt'), zip: v('f_zip'), tel: v('f_tel'),
-  };
-  const xml = generateXML(data);
-  $('xmlPreview').textContent = xml;
-
-  const bytes = encodeCp1251(xml);
-  const blob = new Blob([bytes], { type: 'application/xml' });
-  const a = $('downloadBtn');
-  if (a.href) URL.revokeObjectURL(a.href);
-  a.href = URL.createObjectURL(blob);
-  a.download = `declaration_${data.year || 'XXXX'}_${data.tin || ''}.xml`;
-  showStep(3);
-});
-
-// ---------- генератор XML (F0100215, ред. наказу МФУ №119 від 26.02.2025) ----------
-// Назви тегів і фіксовані коди звірено з офіційною XSD-схемою ДПС (F0100215.xsd + common_types.xsd).
 function generateXML(d) {
   const pib = [d.last, d.first, d.middle].filter(Boolean).join(' ');
-  const n = v => (Math.round((v + Number.EPSILON) * 100) / 100).toFixed(2);
+  const n = v => round2(v).toFixed(2);
   const today = new Date();
   const dd = String(today.getDate()).padStart(2, '0');
   const mm = String(today.getMonth() + 1).padStart(2, '0');
-  const fill = `${dd}${mm}${today.getFullYear()}`; // DGDate: DDMMYYYY
+  const fill = `${dd}${mm}${today.getFullYear()}`;
 
-  // тег лише якщо значення непорожнє
   const tag = (name, val) => (val !== '' && val != null) ? `    <${name}>${esc(val)}</${name}>\n` : '';
-  const money = (name, val) => (val ? `    <${name}>${n(val)}</${name}>\n` : '');
+  const moneyTag = (name, val) => `    <${name}>${n(val)}</${name}>\n`;
+  const salaryBlock = (prefix, income, pdfo, vz) =>
+    income > 0 ? moneyTag(`${prefix}G3`, income) + moneyTag(`${prefix}G4`, pdfo) + moneyTag(`${prefix}G5`, vz) : '';
+
+  const catCode = CAT_CODES.includes(d.cat) ? d.cat : 'H05';
+  const totalIncome = d.income101 + d.income102 + d.income103;
+  const totalPdfo = d.pdfo101 + d.pdfo102 + d.pdfo103;
+  const totalVz = d.vz101 + d.vz102 + d.vz103;
+  const stiName = d.stiName || d.sti;
 
   let body = '';
-  body += `    <HZ>1</HZ>\n`;                          // тип декларації: звітна
-  body += tag('HZY', d.year);                          // звітний рік
+  body += `    <HZ>1</HZ>\n`;
+  body += tag('HZY', d.year);
   body += tag('HNAME', pib);
   body += tag('HTIN', d.tin);
   body += tag('HCITY', d.city);
@@ -477,26 +463,23 @@ function generateXML(d) {
   body += tag('HZIP', d.zip);
   body += tag('HTEL', d.tel);
   body += tag('HEMAIL', d.email);
-  body += tag('HSTI', d.stiName || d.sti);
-  body += `    <H01>1</H01>\n`;                        // резидент
-  body += `    <H03>1</H03>\n`;                        // заповнено самостійно
-  body += `    <${d.cat || 'H05'}>1</${d.cat || 'H05'}>\n`; // категорія платника
-  // Рядок 10 (оподатковуваний дохід) = зарплата. Гр.3 дохід, гр.4 ПДФО, гр.5 ВЗ.
-  body += money('R010G3', d.income);
-  body += money('R010G4', d.pdfo);
-  body += money('R010G5', d.vz);
-  // Деталь рядка 10: 10.1 (звичайна зарплата) АБО 10.3 (Дія Сіті, ПДФО 5%).
-  const sr = d.salaryRow === '10.3' ? '0103' : '0101';
-  body += money(`R${sr}G3`, d.income);
-  body += money(`R${sr}G4`, d.pdfo);
-  body += money(`R${sr}G5`, d.vz);
-  // Рядок 11 — доходи, що НЕ оподатковуються (код 129 → 11.3).
-  if (d.nonTax) {
-    body += money('R011G3', d.nonTax);
-    body += money('R0113G3', d.nonTax);
+  body += tag('HSTI', stiName);
+  body += `    <H01>1</H01>\n`;
+  body += `    <H03>1</H03>\n`;
+  body += `    <${catCode}>1</${catCode}>\n`;
+  if (totalIncome > 0) {
+    body += moneyTag('R010G3', totalIncome);
+    body += moneyTag('R010G4', totalPdfo);
+    body += moneyTag('R010G5', totalVz);
   }
-  // Рядок 12 — загальна сума річного доходу (рядок 10 + рядок 11).
-  body += money('R012G3', d.income + (d.nonTax || 0));
+  body += salaryBlock('R0101', d.income101, d.pdfo101, d.vz101);
+  body += salaryBlock('R0102', d.income102, d.pdfo102, d.vz102);
+  body += salaryBlock('R0103', d.income103, d.pdfo103, d.vz103);
+  if (d.nonTax > 0) {
+    body += moneyTag('R011G3', d.nonTax);
+    body += moneyTag('R0113G3', d.nonTax);
+  }
+  if (totalIncome + d.nonTax > 0) body += moneyTag('R012G3', totalIncome + d.nonTax);
   body += `    <HFILL>${fill}</HFILL>\n`;
   body += tag('HBOS', pib);
 
@@ -519,43 +502,255 @@ ${tag('C_STI_ORIG', d.sti)}    <C_DOC_STAN>1</C_DOC_STAN>
 ${body}  </DECLARBODY>
 </DECLAR>`;
 }
-function esc(s) {
-  return String(s).replace(/[<>&'"]/g, c =>
-    ({ '<':'&lt;', '>':'&gt;', '&':'&amp;', "'":'&apos;', '"':'&quot;' }[c]));
-}
 
-// ---------- кодування Windows-1251 (вимога ДПСУ) ----------
 function buildCp1251Map() {
   const map = new Map();
-  for (let i = 0; i < 128; i++) map.set(i, i);            // ASCII
-  for (let i = 0x410; i <= 0x44F; i++) map.set(i, i - 0x410 + 0xC0); // А..я
+  for (let i = 0; i < 128; i++) map.set(i, i);
+  for (let i = 0x410; i <= 0x44F; i++) map.set(i, i - 0x410 + 0xC0);
   const extra = {
-    0x401:0xA8, 0x451:0xB8,                 // Ё ё
-    0x404:0xAA, 0x454:0xBA,                 // Є є
-    0x406:0xB2, 0x456:0xB3,                 // І і
-    0x407:0xAF, 0x457:0xBF,                 // Ї ї
-    0x490:0xA5, 0x491:0xB4,                 // Ґ ґ
-    0x2116:0xB9,                            // №
-    0x00AB:0xAB, 0x00BB:0xBB,               // « »
-    0x2013:0x96, 0x2014:0x97,               // – —
-    0x2019:0x27, 0x2018:0x27,               // ' ' → '
-    0x201C:0x22, 0x201D:0x22,               // " " → "
-    0x00A0:0x20,                            // nbsp → space
+    0x0401:0xA8, 0x0451:0xB8,
+    0x0404:0xAA, 0x0454:0xBA,
+    0x0406:0xB2, 0x0456:0xB3,
+    0x0407:0xAF, 0x0457:0xBF,
+    0x0490:0xA5, 0x0491:0xB4,
+    0x2116:0xB9,
+    0x00AB:0xAB, 0x00BB:0xBB,
+    0x2013:0x96, 0x2014:0x97,
+    0x2010:0x2D, 0x2212:0x2D,
+    0x2018:0x91, 0x2019:0x92,
+    0x201A:0x82, 0x201E:0x84,
+    0x201C:0x93, 0x201D:0x94,
+    0x2026:0x85,
+    0x2022:0x95,
+    0x2039:0x8B, 0x203A:0x9B,
+    0x20AC:0x88,
+    0x2122:0x99,
+    0x02BC:0x27, 0x0060:0x27,
+    0x00A0:0x20,
   };
   for (const k in extra) map.set(+k, extra[k]);
   return map;
 }
 const CP1251 = buildCp1251Map();
+
 function encodeCp1251(str) {
   const out = new Uint8Array(str.length);
+  const unmapped = new Set();
+  let len = 0;
   for (let i = 0; i < str.length; i++) {
     const cp = str.codePointAt(i);
-    out[i] = CP1251.has(cp) ? CP1251.get(cp) : 0x3F; // '?'
+    if (cp > 0xFFFF) i++;
+    if (cp <= 0x1F && cp !== 0x09 && cp !== 0x0A && cp !== 0x0D) continue;
+    if (CP1251.has(cp)) { out[len++] = CP1251.get(cp); }
+    else { unmapped.add(String.fromCodePoint(cp)); out[len++] = 0x3F; }
   }
-  return out;
+  return { bytes: out.slice(0, len), unmapped: [...unmapped] };
+}
+// === PURE_END ===
+
+const state = {
+  tin:'', last:'', first:'', middle:'', year:'', rows:[], excludedYearRows:0,
+  otherCodes:{}, stiCode:'', stiName:'', email:'', nonTaxable:0, nonTaxWithheld:false,
+};
+
+const $ = id => document.getElementById(id);
+const dropzone = $('dropzone'), fileInput = $('fileInput');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+});
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.classList.remove('drag');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+
+const MAX_FILE_BYTES = 30 * 1024 * 1024;
+const MAX_PAGES = 40;
+
+async function handleFile(file) {
+  setStatus('Обробка PDF…');
+  try {
+    if (file.size > MAX_FILE_BYTES) { setStatus('Файл завеликий (>30 МБ).', true); return; }
+    const buf = await file.arrayBuffer();
+    const head = new Uint8Array(buf.slice(0, 5));
+    if (String.fromCharCode(...head) !== '%PDF-') { setStatus('Це не PDF-файл.', true); return; }
+    const text = await extractText(buf);
+    Object.assign(state, parseCertificate(text));
+    fillReview();
+    showStep(2);
+  } catch (err) {
+    console.error(err);
+    setStatus('Не вдалося обробити файл: ' + err.message, true);
+  }
+}
+function setStatus(msg, isErr) {
+  const el = $('parseStatus'); el.textContent = msg;
+  el.style.color = isErr ? '#dc2626' : 'var(--muted)';
 }
 
-// ---------- навігація ----------
+async function extractText(buf) {
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buf), isEvalSupported: false }).promise;
+  const lines = [];
+  const pageCount = Math.min(doc.numPages, MAX_PAGES);
+  for (let p = 1; p <= pageCount; p++) {
+    const page = await doc.getPage(p);
+    const tc = await page.getTextContent();
+    const items = tc.items
+      .filter(i => i.str !== undefined)
+      .sort((a, b) => (b.transform[5] - a.transform[5]) || (a.transform[4] - b.transform[4]));
+    let lastY = null, lastEndX = null, line = '';
+    for (const it of items) {
+      const y = Math.round(it.transform[5]);
+      const x = it.transform[4];
+      if (lastY === null) lastY = y;
+      if (Math.abs(y - lastY) > 3) { lines.push(line.trim()); line = ''; lastY = y; lastEndX = null; }
+      const gap = lastEndX === null ? Infinity : x - lastEndX;
+      const prevChar = line.slice(-1), nextChar = it.str.slice(0, 1);
+      const isDigitSplit = gap < 1 && /\d/.test(prevChar) && /\d/.test(nextChar);
+      line += (line && !isDigitSplit ? ' ' : '') + it.str;
+      lastEndX = x + (it.width || 0);
+    }
+    if (line.trim()) lines.push(line.trim());
+  }
+  return lines.join('\n');
+}
+
+function fmt(n) { return round2(n).toLocaleString('uk-UA', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+
+function renderReviewNotes(notes) {
+  const el = $('reviewNote');
+  el.innerHTML = notes.length
+    ? '<strong>Зверніть увагу:</strong><ul>' + notes.map(n => `<li>${n}</li>`).join('') + '</ul>'
+    : '';
+  el.style.display = notes.length ? '' : 'none';
+}
+
+function fillReview() {
+  $('f_tin').value = state.tin;
+  $('f_last').value = state.last;
+  $('f_first').value = state.first;
+  $('f_middle').value = state.middle;
+  $('f_year').value = state.year;
+
+  const { salary, civil, diia } = classifyRows(state.rows);
+  $('f_income101').value = salary.income ? round2(salary.income) : '';
+  $('f_pdfo101').value = salary.income ? round2(salary.pdfo) : '';
+  $('f_vz101').value = salary.income ? round2(salary.vz) : '';
+  $('f_income102').value = civil.income ? round2(civil.income) : '';
+  $('f_pdfo102').value = civil.income ? round2(civil.pdfo) : '';
+  $('f_vz102').value = civil.income ? round2(civil.vz) : '';
+  $('f_income103').value = diia.income ? round2(diia.income) : '';
+  $('f_pdfo103').value = diia.income ? round2(diia.pdfo) : '';
+  $('f_vz103').value = diia.income ? round2(diia.vz) : '';
+  $('f_nontax').value = state.nonTaxable || '';
+
+  $('f_sti').value = state.stiCode;
+  $('f_stiname').value = state.stiName;
+  $('f_email').value = state.email;
+
+  const tb = $('rowsTable').querySelector('tbody');
+  tb.innerHTML = state.rows.map(r =>
+    `<tr><td>${escHtml(r.agent) || '—'}</td><td>${escHtml(r.month)}</td><td>${escHtml(r.code)}</td>
+     <td class="money">${fmt(r.income)}</td><td class="money">${fmt(r.pdfo)}</td>
+     <td class="money">${fmt(r.vz)}</td></tr>`).join('');
+  const allTotal = state.rows.reduce((a, r) => ({
+    income: a.income + r.income, pdfo: a.pdfo + r.pdfo, vz: a.vz + r.vz
+  }), { income: 0, pdfo: 0, vz: 0 });
+  $('rowsTable').querySelector('tfoot').innerHTML =
+    `<tr><td>Разом (${state.rows.length} рядків)</td><td></td><td></td>
+     <td class="money">${fmt(allTotal.income)}</td><td class="money">${fmt(allTotal.pdfo)}</td>
+     <td class="money">${fmt(allTotal.vz)}</td></tr>`;
+
+  const notes = [];
+  if (!state.rows.length) notes.push('Рядків зарплати / ЦПД (коди 101, 102) не знайдено — перевірте файл або введіть суми вручну.');
+  if (state.excludedYearRows > 0) {
+    notes.push(`У довідці знайдено рядки за <b>іншим звітним роком</b> (${state.excludedYearRows} шт.) — вони не враховані в сумах. ` +
+      'Якщо довідка охоплює декілька років, завантажте окрему довідку на кожен рік.');
+  }
+  const others = Object.entries(state.otherCodes);
+  if (others.length) {
+    notes.push('У довідці є інші доходи, які <b>не включені</b> в цей MVP: ' +
+      others.map(([c, n]) => `код ${c} (${n} рядк.)`).join(', ') + '.');
+  }
+  if (state.nonTaxable > 0) {
+    notes.push(`Дохід за кодом 129 (${fmt(state.nonTaxable)} грн) додано у рядок 11.3 як не оподатковуваний (пп. 165.1.2 ПКУ).`);
+  }
+  if (state.nonTaxWithheld) {
+    notes.push('За кодом 129 у довідці є ненульове утримання ПДФО/ВЗ — це нетипово для «не оподатковуваного» доходу. Перевірте суму вручну.');
+  }
+  if (diia.income > 0 && (salary.income > 0 || civil.income > 0)) {
+    notes.push('Знайдено дохід і за звичайною ставкою, і за ставкою Дія Сіті (≈5%) — суми розділено на відповідні блоки. Перевірте всі.');
+  }
+  if (diia.income > 0) {
+    notes.push('Дохід Дія Сіті: пільгові 5% ПДФО діють у межах еквівалента 240&nbsp;000 євро на рік (ст. 170.14-1 ПКУ). Перевищення цей MVP не розраховує.');
+  }
+  if (salary.income > 0 && Math.abs(salary.pdfo / salary.income - 0.18) > 0.03) {
+    notes.push(`Ставка ПДФО у блоці 10.1 (${(100 * salary.pdfo / salary.income).toFixed(1)}%) помітно відрізняється від стандартних 18% — перевірте суми.`);
+  }
+  if (civil.income > 0 && Math.abs(civil.pdfo / civil.income - 0.18) > 0.03) {
+    notes.push(`Ставка ПДФО у блоці 10.2 (${(100 * civil.pdfo / civil.income).toFixed(1)}%) помітно відрізняється від стандартних 18% — перевірте суми.`);
+  }
+  if (diia.income > 0 && Math.abs(diia.pdfo / diia.income - 0.05) > 0.02) {
+    notes.push(`Ставка ПДФО у блоці 10.3 (${(100 * diia.pdfo / diia.income).toFixed(1)}%) помітно відрізняється від пільгових 5% — перевірте суми.`);
+  }
+  if (state.rows.some(r => r.pdfoMismatch)) {
+    notes.push('У деяких рядках нарахований і фактично утриманий ПДФО/ВЗ відрізняються — перевірте деталізацію нижче.');
+  }
+  renderReviewNotes(notes);
+}
+
+function collectForm() {
+  const v = id => $(id).value.trim();
+  const num = id => parseFloat($(id).value) || 0;
+  return {
+    tin: v('f_tin'), last: v('f_last'), first: v('f_first'), middle: v('f_middle'),
+    year: v('f_year'),
+    income101: num('f_income101'), pdfo101: num('f_pdfo101'), vz101: num('f_vz101'),
+    income102: num('f_income102'), pdfo102: num('f_pdfo102'), vz102: num('f_vz102'),
+    income103: num('f_income103'), pdfo103: num('f_pdfo103'), vz103: num('f_vz103'),
+    nonTax: num('f_nontax'),
+    cat: v('f_cat'), sti: v('f_sti'), stiName: v('f_stiname'),
+    creg: v('f_creg'), craj: v('f_craj'), email: v('f_email'),
+    city: v('f_city'), street: v('f_street'), build: v('f_build'),
+    apt: v('f_apt'), zip: v('f_zip'), tel: v('f_tel'),
+  };
+}
+
+$('genBtn').addEventListener('click', () => {
+  const data = collectForm();
+  const errors = validate(data);
+  if (errors.length) {
+    renderReviewNotes(errors.map(e => `<b>${escHtml(e)}</b>`));
+    $('reviewNote').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+
+  const xml = generateXML(data);
+  $('xmlPreview').textContent = xml;
+
+  const { bytes, unmapped } = encodeCp1251(xml);
+  const blob = new Blob([bytes], { type: 'application/xml' });
+  const a = $('downloadBtn');
+  if (a.href) URL.revokeObjectURL(a.href);
+  a.href = URL.createObjectURL(blob);
+  a.download = `declaration_${data.year || 'XXXX'}.xml`;
+
+  const encWarn = $('encodingWarning');
+  if (unmapped.length) {
+    encWarn.textContent = 'Увага: символи «' + unmapped.join('') + '» не підтримуються кодуванням ' +
+      'windows-1251 і в XML-файлі замінені на «?». Перевірте текстові поля (ПІБ, адреса) вручну.';
+    encWarn.classList.remove('hidden');
+  } else {
+    encWarn.classList.add('hidden');
+  }
+
+  showStep(3);
+});
+
 function showStep(n) {
   $('step-upload').classList.toggle('hidden', n !== 1);
   $('step-review').classList.toggle('hidden', n !== 2);
@@ -567,8 +762,34 @@ function showStep(n) {
   }
   window.scrollTo(0, 0);
 }
-$('backBtn').addEventListener('click', () => { fileInput.value = ''; setStatus(''); showStep(1); });
-$('restartBtn').addEventListener('click', () => { fileInput.value = ''; setStatus(''); showStep(1); });
+
+const FORM_FIELD_IDS = [
+  'f_tin','f_last','f_first','f_middle','f_year',
+  'f_income101','f_pdfo101','f_vz101','f_income102','f_pdfo102','f_vz102',
+  'f_income103','f_pdfo103','f_vz103','f_nontax',
+  'f_stiname','f_sti','f_creg','f_craj','f_email',
+  'f_city','f_street','f_build','f_apt','f_zip','f_tel',
+];
+function resetAll() {
+  Object.assign(state, {
+    tin:'', last:'', first:'', middle:'', year:'', rows:[], excludedYearRows:0,
+    otherCodes:{}, stiCode:'', stiName:'', email:'', nonTaxable:0, nonTaxWithheld:false,
+  });
+  fileInput.value = '';
+  setStatus('');
+  const a = $('downloadBtn');
+  if (a.href) { URL.revokeObjectURL(a.href); a.removeAttribute('href'); }
+  $('xmlPreview').textContent = '';
+  $('encodingWarning').classList.add('hidden');
+  FORM_FIELD_IDS.forEach(id => { $(id).value = ''; });
+  $('f_cat').value = 'H05';
+  $('rowsTable').querySelector('tbody').innerHTML = '';
+  $('rowsTable').querySelector('tfoot').innerHTML = '';
+  renderReviewNotes([]);
+  showStep(1);
+}
+$('backBtn').addEventListener('click', resetAll);
+$('restartBtn').addEventListener('click', resetAll);
 </script>
 </body>
 </html>
